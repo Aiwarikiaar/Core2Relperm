@@ -140,17 +140,39 @@ st.sidebar.header("Simulation Settings")
 NX = st.sidebar.slider("Grid cells (NX)", min_value=20, max_value=500, value=50, step=10)
 refine_grid = st.sidebar.checkbox("Refine grid near boundaries", value=True)
 gravity_on = st.sidebar.checkbox("Include gravity", value=False)
+fingering_on = st.sidebar.checkbox("Viscous fingering correction", value=False,
+    help="Approximate viscous fingering via Todd-Longstaff style kr blending. "
+         "Blends original kr curves toward straight-line (miscible-like) kr.")
+if fingering_on:
+    omega = st.sidebar.slider(
+        "Mixing parameter (\u03c9)", min_value=0.0, max_value=1.0, value=0.5, step=0.05,
+        help="\u03c9 = 1.0: original curves (no fingering). "
+             "\u03c9 = 0.0: straight-line kr (maximum fingering).")
+else:
+    omega = 1.0
 
 # ---------------------------------------------------------------------------
 # Build models
 # ---------------------------------------------------------------------------
 def build_and_run():
     """Construct models from sidebar parameters and run the solver."""
-    # Relperm model
+    # Relperm model — apply Todd-Longstaff fingering correction when enabled.
+    # Blends kr exponents toward 1.0 (straight-line kr) using mixing parameter omega.
+    # omega=1: original curves, omega=0: straight-line kr (maximum fingering).
     if rlp_type == "Corey":
-        rlp_model = rlplib.Rlp2PCorey(Swc, Sorw, Nw, Now, Ke_w, Ke_o)
+        rlp_model_original = rlplib.Rlp2PCorey(Swc, Sorw, Nw, Now, Ke_w, Ke_o)
+        Nw_eff = omega * Nw + (1.0 - omega) * 1.0
+        Now_eff = omega * Now + (1.0 - omega) * 1.0
+        rlp_model = rlplib.Rlp2PCorey(Swc, Sorw, Nw_eff, Now_eff, Ke_w, Ke_o)
     else:
-        rlp_model = rlplib.Rlp2PLET(Swc, Sorw, Lw, Ew, Tw, Lo, Eo, To, Ke_w, Ke_o)
+        rlp_model_original = rlplib.Rlp2PLET(Swc, Sorw, Lw, Ew, Tw, Lo, Eo, To, Ke_w, Ke_o)
+        Lw_eff = omega * Lw + (1.0 - omega) * 1.0
+        Ew_eff = omega * Ew + (1.0 - omega) * 1.0
+        Tw_eff = omega * Tw + (1.0 - omega) * 1.0
+        Lo_eff = omega * Lo + (1.0 - omega) * 1.0
+        Eo_eff = omega * Eo + (1.0 - omega) * 1.0
+        To_eff = omega * To + (1.0 - omega) * 1.0
+        rlp_model = rlplib.Rlp2PLET(Swc, Sorw, Lw_eff, Ew_eff, Tw_eff, Lo_eff, Eo_eff, To_eff, Ke_w, Ke_o)
 
     # Capillary pressure model
     EPS_PC = 0.001
@@ -203,7 +225,7 @@ def build_and_run():
     )
 
     model.solve()
-    return model, rlp_model, cpr_model, sw_arr, pc_arr
+    return model, rlp_model, rlp_model_original, cpr_model, sw_arr, pc_arr
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +236,7 @@ run_clicked = st.button("Run Simulation", type="primary", use_container_width=Tr
 if run_clicked:
     with st.spinner("Running 1D2P solver…"):
         try:
-            model, rlp_model, cpr_model, sw_pc_arr, pc_vals = build_and_run()
+            model, rlp_model, rlp_model_original, cpr_model, sw_pc_arr, pc_vals = build_and_run()
         except Exception as e:
             st.error(f"Simulation failed: {e}")
             st.stop()
@@ -229,6 +251,8 @@ if run_clicked:
     st.session_state["tss"] = tss
     st.session_state["model"] = model
     st.session_state["rlp_model"] = rlp_model
+    st.session_state["rlp_model_original"] = rlp_model_original
+    st.session_state["fingering_on"] = fingering_on
     st.session_state["sw_pc_arr"] = sw_pc_arr
     st.session_state["pc_vals"] = pc_vals
 
@@ -240,6 +264,8 @@ if "results" in st.session_state:
     tss = st.session_state["tss"]
     model = st.session_state["model"]
     rlp_model_cached = st.session_state["rlp_model"]
+    rlp_model_orig_cached = st.session_state["rlp_model_original"]
+    fingering_was_on = st.session_state["fingering_on"]
     sw_pc_arr = st.session_state["sw_pc_arr"]
     pc_vals = st.session_state["pc_vals"]
 
@@ -258,8 +284,21 @@ if "results" in st.session_state:
 
         fig_kr = make_subplots(rows=1, cols=2, subplot_titles=("Relative Permeability", "Capillary Pressure"))
 
-        fig_kr.add_trace(go.Scatter(x=swv, y=kr1, name="krw", line=dict(color="blue")), row=1, col=1)
-        fig_kr.add_trace(go.Scatter(x=swv, y=kr2, name="kro", line=dict(color="red")), row=1, col=1)
+        if fingering_was_on:
+            # Show original curves as dashed for reference
+            kr1_orig = rlp_model_orig_cached.calc_kr1(swv)
+            kr2_orig = rlp_model_orig_cached.calc_kr2(swv)
+            fig_kr.add_trace(go.Scatter(x=swv, y=kr1_orig, name="krw (original)",
+                line=dict(color="blue", dash="dash", width=1)), row=1, col=1)
+            fig_kr.add_trace(go.Scatter(x=swv, y=kr2_orig, name="kro (original)",
+                line=dict(color="red", dash="dash", width=1)), row=1, col=1)
+            fig_kr.add_trace(go.Scatter(x=swv, y=kr1, name="krw (fingering)",
+                line=dict(color="blue", width=2)), row=1, col=1)
+            fig_kr.add_trace(go.Scatter(x=swv, y=kr2, name="kro (fingering)",
+                line=dict(color="red", width=2)), row=1, col=1)
+        else:
+            fig_kr.add_trace(go.Scatter(x=swv, y=kr1, name="krw", line=dict(color="blue")), row=1, col=1)
+            fig_kr.add_trace(go.Scatter(x=swv, y=kr2, name="kro", line=dict(color="red")), row=1, col=1)
         fig_kr.update_xaxes(title_text="Sw", row=1, col=1)
         fig_kr.update_yaxes(title_text="kr", range=[0, 1.05], row=1, col=1)
 
