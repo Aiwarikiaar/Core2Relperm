@@ -137,7 +137,7 @@ st.sidebar.markdown("---")
 # Sidebar — Simulation Settings
 # ---------------------------------------------------------------------------
 st.sidebar.header("Simulation Settings")
-NX = st.sidebar.slider("Grid cells (NX)", min_value=20, max_value=200, value=50, step=10)
+NX = st.sidebar.slider("Grid cells (NX)", min_value=20, max_value=500, value=50, step=10)
 refine_grid = st.sidebar.checkbox("Refine grid near boundaries", value=True)
 gravity_on = st.sidebar.checkbox("Include gravity", value=False)
 
