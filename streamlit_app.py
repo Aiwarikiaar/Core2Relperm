@@ -409,57 +409,167 @@ if "results" in st.session_state:
             f"Refinement: **{'On' if refine_grid else 'Off'}**"
         )
 
-        # --- Sub-plot 3: Interactive 1D saturation strip at selected time ---
-        st.subheader("Saturation at Selected Time")
-        n_steps = len(movie_tD_g)
-        step_idx = st.slider(
-            "Select timestep",
-            min_value=0,
-            max_value=n_steps - 1,
-            value=n_steps - 1,
-            format=f"Step %d",
-            key="grid_slider",
-        )
-        st.write(f"PV Injected: **{movie_tD_g[step_idx]:.4f}**")
+        # --- Sub-plot 3: Animated flood playback ---
+        st.subheader("Flood Animation")
 
-        sw_snap = movie_sw_g[step_idx]
-
-        fig_strip = go.Figure()
-        # Colored bar for each cell
-        for i in range(len(x_g)):
-            fig_strip.add_shape(
-                type="rect",
-                x0=x_g[i] - cell_widths[i] / 2,
-                x1=x_g[i] + cell_widths[i] / 2,
-                y0=0,
-                y1=1,
-                fillcolor=f"rgba({int(255*(1-sw_snap[i]))}, {int(100+100*sw_snap[i])}, {int(255*sw_snap[i])}, 0.85)",
-                line_width=0.5,
-                line_color="white",
+        col_speed, col_info = st.columns([1, 3])
+        with col_speed:
+            speed = st.select_slider(
+                "Playback speed",
+                options=["0.25x", "0.5x", "1x", "2x", "4x"],
+                value="1x",
+                key="anim_speed",
             )
-        # Invisible scatter for hover info
-        fig_strip.add_trace(
+        speed_ms = {"0.25x": 320, "0.5x": 160, "1x": 80, "2x": 40, "4x": 20}[speed]
+
+        # Subsample to ~50 frames for smooth animation
+        max_frames = 50
+        n_total = len(movie_tD_g)
+        if n_total > max_frames:
+            frame_indices = np.linspace(0, n_total - 1, max_frames, dtype=int)
+        else:
+            frame_indices = np.arange(n_total)
+
+        def sw_to_colors(sw_arr):
+            return [
+                f"rgb({int(255 * (1 - s))},{int(100 + 100 * s)},{int(255 * s)})"
+                for s in sw_arr
+            ]
+
+        sw0 = movie_sw_g[frame_indices[0]]
+
+        fig_anim = make_subplots(
+            rows=2, cols=1,
+            row_heights=[0.82, 0.18],
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+        )
+
+        # Trace 0: Sw profile line
+        fig_anim.add_trace(
+            go.Scatter(
+                x=x_g, y=sw0,
+                mode="lines",
+                line=dict(color="royalblue", width=2.5),
+                name="Sw",
+                hovertemplate="x=%{x:.3f} cm<br>Sw=%{y:.4f}<extra></extra>",
+            ),
+            row=1, col=1,
+        )
+
+        # Trace 1: color-coded bar strip
+        fig_anim.add_trace(
             go.Bar(
                 x=x_g,
                 y=[1] * len(x_g),
                 width=cell_widths,
-                marker_color=[
-                    f"rgba({int(255*(1-s))}, {int(100+100*s)}, {int(255*s)}, 0.85)"
-                    for s in sw_snap
-                ],
-                customdata=np.column_stack([np.arange(1, len(x_g) + 1), sw_snap, cell_widths]),
-                hovertemplate="Cell %{customdata[0]:.0f}<br>Sw: %{customdata[1]:.4f}<br>Width: %{customdata[2]:.4f} cm<extra></extra>",
+                marker_color=sw_to_colors(sw0),
                 showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=2, col=1,
+        )
+
+        # Build animation frames
+        frames = []
+        for idx in frame_indices:
+            sw_f = movie_sw_g[idx]
+            frames.append(
+                go.Frame(
+                    data=[
+                        go.Scatter(
+                            x=x_g, y=sw_f,
+                            mode="lines",
+                            line=dict(color="royalblue", width=2.5),
+                        ),
+                        go.Bar(
+                            x=x_g,
+                            y=[1] * len(x_g),
+                            width=cell_widths,
+                            marker_color=sw_to_colors(sw_f),
+                        ),
+                    ],
+                    name=f"{movie_tD_g[idx]:.3f}",
+                    traces=[0, 1],
+                )
             )
+        fig_anim.frames = frames
+
+        # Slider steps
+        slider_steps = [
+            dict(
+                args=[
+                    [f.name],
+                    dict(frame=dict(duration=0, redraw=True), mode="immediate", transition=dict(duration=0)),
+                ],
+                label=f.name,
+                method="animate",
+            )
+            for f in frames
+        ]
+
+        fig_anim.update_layout(
+            height=500,
+            margin=dict(t=10, b=10),
+            updatemenus=[
+                dict(
+                    type="buttons",
+                    showactive=False,
+                    y=1.12, x=0.0, xanchor="left",
+                    buttons=[
+                        dict(
+                            label="Play",
+                            method="animate",
+                            args=[
+                                None,
+                                dict(
+                                    frame=dict(duration=speed_ms, redraw=True),
+                                    fromcurrent=True,
+                                    transition=dict(duration=0),
+                                ),
+                            ],
+                        ),
+                        dict(
+                            label="Pause",
+                            method="animate",
+                            args=[
+                                [None],
+                                dict(
+                                    frame=dict(duration=0, redraw=False),
+                                    mode="immediate",
+                                    transition=dict(duration=0),
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+            sliders=[
+                dict(
+                    active=0,
+                    steps=slider_steps,
+                    x=0.05, len=0.95,
+                    currentvalue=dict(
+                        prefix="PV Injected: ",
+                        visible=True,
+                        xanchor="center",
+                        font=dict(size=13),
+                    ),
+                    transition=dict(duration=0),
+                ),
+            ],
         )
-        fig_strip.update_layout(
-            xaxis_title="Position along core [cm]",
-            yaxis=dict(visible=False, range=[0, 1]),
-            height=120,
-            margin=dict(t=5, b=40, l=40, r=40),
-            bargap=0,
-        )
-        st.plotly_chart(fig_strip, use_container_width=True)
+        fig_anim.update_yaxes(title_text="Sw", range=[0, 1.05], row=1, col=1)
+        fig_anim.update_yaxes(visible=False, range=[0, 1], row=2, col=1)
+        fig_anim.update_xaxes(title_text="Position along core [cm]", row=2, col=1)
+
+        st.plotly_chart(fig_anim, use_container_width=True)
+
+        with col_info:
+            st.caption(
+                f"Animation: **{len(frame_indices)}** frames from **{n_total}** timesteps | "
+                f"Use Play/Pause or drag the slider to scrub through the flood."
+            )
 
     # ================================================================
     # TAB 5 — Raw data table
