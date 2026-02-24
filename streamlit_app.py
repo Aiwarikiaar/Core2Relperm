@@ -244,8 +244,8 @@ if "results" in st.session_state:
     pc_vals = st.session_state["pc_vals"]
 
     # ---- Tab layout -------------------------------------------------------
-    tab_kr, tab_sim, tab_sat, tab_data = st.tabs(
-        ["Rel-Perm & Pc", "Production & Pressure", "Saturation Profiles", "Data Table"]
+    tab_kr, tab_sim, tab_sat, tab_grid, tab_data = st.tabs(
+        ["Rel-Perm & Pc", "Production & Pressure", "Saturation Profiles", "Simulation Grid", "Data Table"]
     )
 
     # ================================================================
@@ -346,7 +346,123 @@ if "results" in st.session_state:
         st.plotly_chart(fig_sat, use_container_width=True)
 
     # ================================================================
-    # TAB 4 — Raw data table
+    # TAB 4 — Simulation Grid Visualization
+    # ================================================================
+    with tab_grid:
+        movie_sw_g = res.movie_sw
+        movie_tD_g = res.movie_tD
+        xD_g = res.xD
+        x_g = res.x
+
+        # --- Sub-plot 1: Space-time heatmap ---
+        st.subheader("Space-Time Saturation Map")
+        fig_heatmap = go.Figure(
+            data=go.Heatmap(
+                x=x_g,
+                y=movie_tD_g,
+                z=movie_sw_g,
+                colorscale="RdYlBu",
+                colorbar=dict(title="Sw"),
+                zmin=0,
+                zmax=1,
+            )
+        )
+        fig_heatmap.update_layout(
+            xaxis_title="Position along core [cm]",
+            yaxis_title="PV Injected",
+            height=420,
+            margin=dict(t=10, b=40),
+        )
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+
+        # --- Sub-plot 2: Grid cell diagram ---
+        st.subheader("Grid Cell Sizes")
+        cell_widths = np.diff(np.concatenate([[0], 0.5 * (x_g[:-1] + x_g[1:]), [core_length]]))
+        cell_colors = cell_widths / cell_widths.max()
+
+        fig_cells = go.Figure()
+        for i in range(len(x_g)):
+            fig_cells.add_trace(
+                go.Bar(
+                    x=[x_g[i]],
+                    y=[cell_widths[i]],
+                    width=[cell_widths[i] * 0.95],
+                    marker_color=f"rgba(31,119,180,{0.3 + 0.7 * cell_colors[i]:.2f})",
+                    hovertext=f"Cell {i+1}<br>Centre: {x_g[i]:.4f} cm<br>Width: {cell_widths[i]:.4f} cm",
+                    hoverinfo="text",
+                    showlegend=False,
+                )
+            )
+        fig_cells.update_layout(
+            xaxis_title="Position along core [cm]",
+            yaxis_title="Cell width [cm]",
+            height=250,
+            margin=dict(t=10, b=40),
+            bargap=0,
+        )
+        st.plotly_chart(fig_cells, use_container_width=True)
+
+        st.caption(
+            f"Grid: **{len(x_g)}** cells | "
+            f"Min width: **{cell_widths.min():.4f}** cm | "
+            f"Max width: **{cell_widths.max():.4f}** cm | "
+            f"Refinement: **{'On' if refine_grid else 'Off'}**"
+        )
+
+        # --- Sub-plot 3: Interactive 1D saturation strip at selected time ---
+        st.subheader("Saturation at Selected Time")
+        n_steps = len(movie_tD_g)
+        step_idx = st.slider(
+            "Select timestep",
+            min_value=0,
+            max_value=n_steps - 1,
+            value=n_steps - 1,
+            format=f"Step %d",
+            key="grid_slider",
+        )
+        st.write(f"PV Injected: **{movie_tD_g[step_idx]:.4f}**")
+
+        sw_snap = movie_sw_g[step_idx]
+
+        fig_strip = go.Figure()
+        # Colored bar for each cell
+        for i in range(len(x_g)):
+            fig_strip.add_shape(
+                type="rect",
+                x0=x_g[i] - cell_widths[i] / 2,
+                x1=x_g[i] + cell_widths[i] / 2,
+                y0=0,
+                y1=1,
+                fillcolor=f"rgba({int(255*(1-sw_snap[i]))}, {int(100+100*sw_snap[i])}, {int(255*sw_snap[i])}, 0.85)",
+                line_width=0.5,
+                line_color="white",
+            )
+        # Invisible scatter for hover info
+        fig_strip.add_trace(
+            go.Bar(
+                x=x_g,
+                y=[1] * len(x_g),
+                width=cell_widths,
+                marker_color=[
+                    f"rgba({int(255*(1-s))}, {int(100+100*s)}, {int(255*s)}, 0.85)"
+                    for s in sw_snap
+                ],
+                customdata=np.column_stack([np.arange(1, len(x_g) + 1), sw_snap, cell_widths]),
+                hovertemplate="Cell %{customdata[0]:.0f}<br>Sw: %{customdata[1]:.4f}<br>Width: %{customdata[2]:.4f} cm<extra></extra>",
+                showlegend=False,
+            )
+        )
+        fig_strip.update_layout(
+            xaxis_title="Position along core [cm]",
+            yaxis=dict(visible=False, range=[0, 1]),
+            height=120,
+            margin=dict(t=5, b=40, l=40, r=40),
+            bargap=0,
+        )
+        st.plotly_chart(fig_strip, use_container_width=True)
+
+    # ================================================================
+    # TAB 5 — Raw data table
     # ================================================================
     with tab_data:
         st.dataframe(tss, use_container_width=True, height=500)
